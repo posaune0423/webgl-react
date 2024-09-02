@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import {
   createProgramInfo,
   createBufferInfoFromArrays,
@@ -8,17 +8,25 @@ import {
   resizeCanvasToDisplaySize,
   ProgramInfo,
 } from "twgl.js";
-import vsSource from "@/libs/webgl/shaders/grid.vs";
-import fsSource from "@/libs/webgl/shaders/grid.fs";
+
+import gridVsSource from "@/libs/webgl/shaders/grid.vs";
+import gridFsSource from "@/libs/webgl/shaders/grid.fs";
+import pixelVsSource from "@/libs/webgl/shaders/pixel.vs";
+import pixelFsSource from "@/libs/webgl/shaders/pixel.fs";
+
 import { useGridState } from "@/hooks/useGridState";
 import { BASE_CELL_SIZE, BASE_LINE_WIDTH, BUFFER_RATIO, DEFAULT_GRID_COLOR, MAX_SCALE, MIN_SCALE } from "@/constants";
 import { convertClientPosToCanvasPos } from "@/utils/canvas";
+import { Pixel } from "@/types";
+import { fetchRandomPixelData } from "@/libs/mockApi";
 
 export const PixelGrid = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { gridState, setGridState } = useGridState();
   const glRef = useRef<WebGL2RenderingContext | null>(null);
-  const programInfoRef = useRef<ProgramInfo | null>(null);
+  const gridProgramInfoRef = useRef<ProgramInfo | null>(null);
+  const pixelProgramInfoRef = useRef<ProgramInfo | null>(null);
+  const [pixels, setPixels] = useState<Pixel[]>([]);
 
   const getVisibleArea = useCallback(() => {
     const gl = glRef.current;
@@ -75,8 +83,9 @@ export const PixelGrid = () => {
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
     resizeCanvasToDisplaySize(gl.canvas as HTMLCanvasElement);
 
-    const programInfo = programInfoRef.current;
-    if (!programInfo) {
+    const gridProgramInfo = gridProgramInfoRef.current;
+    const pixelProgramInfo = pixelProgramInfoRef.current;
+    if (!gridProgramInfo || !pixelProgramInfo) {
       console.error("ProgramInfo not initialized");
       return;
     }
@@ -84,17 +93,16 @@ export const PixelGrid = () => {
     const { startX, startY, endX, endY } = getVisibleArea();
     const darker = gridState.scale > MIN_SCALE * BUFFER_RATIO ? 1.0 : 0.5;
 
-    const positions: number[] = [];
-
+    // グリッドの描画
+    const gridPositions: number[] = [];
     for (let x = startX; x <= endX; x += BASE_CELL_SIZE) {
-      positions.push(x, startY, x, endY);
+      gridPositions.push(x, startY, x, endY);
     }
-
     for (let y = startY; y <= endY; y += BASE_CELL_SIZE) {
-      positions.push(startX, y, endX, y);
+      gridPositions.push(startX, y, endX, y);
     }
 
-    const uniforms = {
+    const gridUniforms = {
       uResolution: [gl.canvas.width, gl.canvas.height],
       uOffset: [gridState.offsetX, gridState.offsetY],
       uScale: gridState.scale,
@@ -107,15 +115,63 @@ export const PixelGrid = () => {
       ],
     };
 
-    const bufferInfo = createBufferInfoFromArrays(gl, {
-      aPosition: { numComponents: 2, data: positions },
+    const gridBufferInfo = createBufferInfoFromArrays(gl, {
+      aPosition: { numComponents: 2, data: gridPositions },
     });
 
-    gl.useProgram(programInfo.program);
-    setBuffersAndAttributes(gl, programInfo, bufferInfo);
-    setUniforms(programInfo, uniforms);
-    drawBufferInfo(gl, bufferInfo, gl.LINES, positions.length / 2);
-  }, [gridState, getVisibleArea, programInfoRef]);
+    gl.useProgram(gridProgramInfo.program);
+    setBuffersAndAttributes(gl, gridProgramInfo, gridBufferInfo);
+    setUniforms(gridProgramInfo, gridUniforms);
+    drawBufferInfo(gl, gridBufferInfo, gl.LINES, gridPositions.length / 2);
+  }, [getVisibleArea, gridState]);
+
+  const drawPixels = useCallback(async () => {
+    const gl = glRef.current;
+    if (!gl) {
+      console.error("WebGL not supported");
+      return;
+    }
+
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    resizeCanvasToDisplaySize(gl.canvas as HTMLCanvasElement);
+
+    const pixelProgramInfo = pixelProgramInfoRef.current;
+    if (!pixelProgramInfo) {
+      console.error("ProgramInfo not initialized");
+      return;
+    }
+
+    // ピクセルの描画
+    const pixelPositions: number[] = [];
+    const pixelColors: number[] = [];
+
+    pixels.forEach((pixel) => {
+      const x = pixel.x * BASE_CELL_SIZE;
+      const y = pixel.y * BASE_CELL_SIZE;
+
+      const positions = [x, y, x + BASE_CELL_SIZE, y, x, y + BASE_CELL_SIZE, x + BASE_CELL_SIZE, y + BASE_CELL_SIZE];
+      pixelPositions.push(...positions);
+      for (let i = 0; i < 4; i++) {
+        pixelColors.push(pixel.color.r, pixel.color.g, pixel.color.b, pixel.color.a);
+      }
+    });
+
+    const pixelBufferInfo = createBufferInfoFromArrays(gl, {
+      aPosition: { numComponents: 2, data: pixelPositions },
+      aColor: { numComponents: 4, data: pixelColors },
+    });
+
+    const pixelUniforms = {
+      uResolution: [gl.canvas.width, gl.canvas.height],
+      uOffset: [gridState.offsetX, gridState.offsetY],
+      uScale: gridState.scale,
+    };
+
+    gl.useProgram(pixelProgramInfo.program);
+    setBuffersAndAttributes(gl, pixelProgramInfo, pixelBufferInfo);
+    setUniforms(pixelProgramInfo, pixelUniforms);
+    drawBufferInfo(gl, pixelBufferInfo, gl.TRIANGLE_STRIP, pixelPositions.length / 2);
+  }, [gridState, pixels]);
 
   const initWebGL = useCallback(() => {
     const canvas = canvasRef.current;
@@ -130,7 +186,8 @@ export const PixelGrid = () => {
     glRef.current = gl;
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
     resizeCanvasToDisplaySize(canvas);
-    programInfoRef.current = createProgramInfo(gl, [vsSource, fsSource]);
+    gridProgramInfoRef.current = createProgramInfo(gl, [gridVsSource, gridFsSource]);
+    pixelProgramInfoRef.current = createProgramInfo(gl, [pixelVsSource, pixelFsSource]);
   }, []);
 
   useEffect(() => {
@@ -138,8 +195,20 @@ export const PixelGrid = () => {
   }, [initWebGL]);
 
   useEffect(() => {
-    requestAnimationFrame(drawGrid);
-  }, [drawGrid]);
+    drawGrid();
+    drawPixels();
+  }, [drawGrid, drawPixels]);
+
+  useEffect(() => {
+    const fetchPixels = async () => {
+      console.log("fetchPixels");
+      const fetchedPixels = await fetchRandomPixelData();
+      if (fetchedPixels.length !== pixels.length) {
+        setPixels(fetchedPixels);
+      }
+    };
+    fetchPixels();
+  }, []);
 
   return (
     <canvas

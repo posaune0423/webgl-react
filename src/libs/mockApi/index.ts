@@ -1,22 +1,10 @@
 import { Pixel } from "@/types";
+import { mockPixel } from "./mock";
 
 export const fetchRandomPixelData = async (): Promise<Pixel[]> => {
   return new Promise((resolve) => {
     setTimeout(() => {
-      const pixelData = [];
-      for (let i = 0; i < 1000; i++) {
-        pixelData.push({
-          x: Math.floor(Math.random() * 100),
-          y: Math.floor(Math.random() * 100),
-          color: {
-            r: Math.random(),
-            g: Math.random(),
-            b: Math.random(),
-            a: 1,
-          },
-        });
-      }
-      resolve(pixelData);
+      resolve(mockPixel);
     }, 1000);
   });
 };
