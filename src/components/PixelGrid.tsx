@@ -6,16 +6,37 @@ import {
   setUniforms,
   drawBufferInfo,
   resizeCanvasToDisplaySize,
+  ProgramInfo,
 } from "twgl.js";
 import vsSource from "@/libs/webgl/shaders/grid.vs";
 import fsSource from "@/libs/webgl/shaders/grid.fs";
 import { useGridState } from "@/hooks/useGridState";
-import { BASE_CELL_SIZE, DEFAULT_BACKGROUND_COLOR, DEFAULT_GRID_COLOR, MAX_SCALE, MIN_SCALE } from "@/constants";
+import { BASE_CELL_SIZE, BASE_LINE_WIDTH, BUFFER_RATIO, DEFAULT_GRID_COLOR, MAX_SCALE, MIN_SCALE } from "@/constants";
 import { convertClientPosToCanvasPos } from "@/utils/canvas";
 
-export const Canvas = () => {
+export const PixelGrid = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { gridState, setGridState } = useGridState();
+  const glRef = useRef<WebGL2RenderingContext | null>(null);
+  const programInfoRef = useRef<ProgramInfo | null>(null);
+
+  const getVisibleArea = useCallback(() => {
+    const gl = glRef.current;
+    if (!gl) {
+      return { startX: 0, startY: 0, endX: 1000, endY: 1000 };
+    }
+
+    const canvasWidth = gl.canvas.width;
+    const canvasHeight = gl.canvas.height;
+    const visibleWidth = canvasWidth / gridState.scale;
+    const visibleHeight = canvasHeight / gridState.scale;
+    const startX = Math.floor(gridState.offsetX / BASE_CELL_SIZE) * BASE_CELL_SIZE;
+    const startY = Math.floor(gridState.offsetY / BASE_CELL_SIZE) * BASE_CELL_SIZE;
+    const endX = startX + visibleWidth + BASE_CELL_SIZE;
+    const endY = startY + visibleHeight + BASE_CELL_SIZE;
+
+    return { startX, startY, endX, endY };
+  }, [gridState]);
 
   const handleWheel = useCallback(
     (e: React.WheelEvent<HTMLCanvasElement>) => {
@@ -45,39 +66,23 @@ export const Canvas = () => {
   );
 
   const drawGrid = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const gl = canvas.getContext("webgl2");
+    const gl = glRef.current;
     if (!gl) {
       console.error("WebGL not supported");
       return;
     }
 
-    gl.viewport(0, 0, canvas.width, canvas.height);
-    resizeCanvasToDisplaySize(canvas);
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    resizeCanvasToDisplaySize(gl.canvas as HTMLCanvasElement);
 
-    const programInfo = createProgramInfo(gl, [vsSource, fsSource]);
+    const programInfo = programInfoRef.current;
+    if (!programInfo) {
+      console.error("ProgramInfo not initialized");
+      return;
+    }
 
-    gl.clearColor(
-      DEFAULT_BACKGROUND_COLOR.r,
-      DEFAULT_BACKGROUND_COLOR.g,
-      DEFAULT_BACKGROUND_COLOR.b,
-      DEFAULT_BACKGROUND_COLOR.a
-    );
-    gl.clear(gl.COLOR_BUFFER_BIT);
-
-    const canvasWidth = gl.canvas.width;
-    const canvasHeight = gl.canvas.height;
-    const visibleWidth = canvasWidth / gridState.scale;
-    const visibleHeight = canvasHeight / gridState.scale;
-    const startX = Math.floor(gridState.offsetX / BASE_CELL_SIZE) * BASE_CELL_SIZE;
-    const startY = Math.floor(gridState.offsetY / BASE_CELL_SIZE) * BASE_CELL_SIZE;
-    const endX = startX + visibleWidth + BASE_CELL_SIZE;
-    const endY = startY + visibleHeight + BASE_CELL_SIZE;
-    const BUFFER_RATIO = 1.5;
+    const { startX, startY, endX, endY } = getVisibleArea();
     const darker = gridState.scale > MIN_SCALE * BUFFER_RATIO ? 1.0 : 0.5;
-    const baseLineWidth = 1.0;
 
     const positions: number[] = [];
 
@@ -93,7 +98,7 @@ export const Canvas = () => {
       uResolution: [gl.canvas.width, gl.canvas.height],
       uOffset: [gridState.offsetX, gridState.offsetY],
       uScale: gridState.scale,
-      uLineWidth: baseLineWidth * gridState.scale,
+      uLineWidth: BASE_LINE_WIDTH * gridState.scale,
       uColor: [
         DEFAULT_GRID_COLOR.r * darker,
         DEFAULT_GRID_COLOR.g * darker,
@@ -110,11 +115,37 @@ export const Canvas = () => {
     setBuffersAndAttributes(gl, programInfo, bufferInfo);
     setUniforms(programInfo, uniforms);
     drawBufferInfo(gl, bufferInfo, gl.LINES, positions.length / 2);
-  }, [gridState]);
+  }, [gridState, getVisibleArea, programInfoRef]);
+
+  const initWebGL = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const gl = canvas.getContext("webgl2");
+    if (!gl) {
+      console.error("WebGL not supported");
+      return;
+    }
+
+    glRef.current = gl;
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    resizeCanvasToDisplaySize(canvas);
+    programInfoRef.current = createProgramInfo(gl, [vsSource, fsSource]);
+  }, []);
 
   useEffect(() => {
-    drawGrid();
+    initWebGL();
+  }, [initWebGL]);
+
+  useEffect(() => {
+    requestAnimationFrame(drawGrid);
   }, [drawGrid]);
 
-  return <canvas ref={canvasRef} style={{ width: "100vw", height: "100vh" }} onWheel={handleWheel} />;
+  return (
+    <canvas
+      ref={canvasRef}
+      className="w-full fixed inset-0 h-[calc(100%-50px)] top-[50px] bg-black/80"
+      onWheel={handleWheel}
+    />
+  );
 };
