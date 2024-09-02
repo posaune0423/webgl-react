@@ -1,13 +1,14 @@
+export interface Pixel {
+  x: number;
+  y: number;
+  color: Color;
+}
+
 export interface Color {
   r: number;
   g: number;
   b: number;
   a: number;
-}
-
-export interface GridDimensions {
-  width: number;
-  height: number;
 }
 
 export interface GridState {
