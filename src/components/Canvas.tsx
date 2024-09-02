@@ -48,5 +48,5 @@ export const Canvas = () => {
     requestAnimationFrame(render);
   }, []);
 
-  return <canvas ref={canvasRef} width={400} height={400} />;
+  return <canvas ref={canvasRef} style={{ width: "100vw", height: "100vh" }} />;
 };
